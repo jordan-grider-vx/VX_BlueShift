@@ -1,9 +1,12 @@
 #include <Wire.h>
 #include <BlueShift.h>
 
+#define BUTTON_HOLD_TIME_MS  1500    //Button hold time in milliseconds to indicate a long press
+
 BlueShift blueshift;
 int display_brightness = 4;                //Brightness scale 0-10, 0 is off, 10 is maximum brightness
-bool als_controlled_brightness = false;    //Brightness for display automatically controlled by the ambient light sensor input
+bool als_controlled_brightness = false;    //Brightness for display automatically controlled by the ambient light sensor input, when false, brightness is controlled by the buttons.
+uint32_t mainLoopCounter;                  //For setting function call frequency in the main loop
 
 void setup() {
 
@@ -12,75 +15,76 @@ void setup() {
     ; // wait for serial port to connect.
   }
   Serial.println("BlueShift Example");
- 
-  blueshift.init();
-  blueshift.setDisplayBrightness(display_brightness);
+  bool success =  blueshift.init50005(BUTTON_HOLD_TIME_MS); //For use with the ODN-50005 Imaging Sensor Module, enables the buttons and lights, button hold time for long press
+  if (success) {
+    Serial.println("Connected to Imaging Sensor Module");
+  } else {
+    Serial.println("Could not connect to Imaging Sensor Module");
+  }
+  blueshift.setDisplayBrightness(display_brightness); //Set the display brightness to the initial value
 }
 
 void loop() {
-  buttonManager();
-  
-  
-  delay(10);
+  buttonLoop();  //Handles the button presses
+  ALSLoop();     //Handles reading the ambient light sensor and updating the display brightness
+  delay(10);  //Loop to run a ~100Hz
 }
 
-void ALSManager(void) {
-  
-}
+void buttonLoop(void) {
+  button_state_t buttonPressed = blueshift.buttonManager(); //Gets the state of the button presses
 
-void buttonManager(void) {
-  bool upButtonState = blueshift.upButtonPressed();
-  bool downButtonState = blueshift.downButtonPressed();
-  static bool upButtonLastState;
-  static bool downButtonLastState;
-  unsigned long upHoldTime;
-  unsigned long downHoldTime;
-
-  if (upButtonState && !upButtonLastState) {
-    upHoldTime = millis();
-  }
-
-  if (downButtonState && !downButtonLastState) {
-    downHoldTime = millis();
-    Serial.println("Down Button Press.");
-  }
-
-  if (!upButtonState && upButtonLastState && !downButtonState) {
-    upHoldTime = millis() - upHoldTime;
-    if (upHoldTime > 50) {
-      if (upHoldTime < 1000) {
-        if(!als_controlled_brightness);
+  switch (buttonPressed) {
+    case BUTTON_NO_PRESS:
+      break;
+    case BUTTON_SHORT_UP:
+      Serial.println("Up button short press");
+      if (!als_controlled_brightness) {
         turnUpBrightness();
-        Serial.println("Up button short press");
-      } else {
-        toggleWhiteLED();
-        Serial.println("Up button long press");
       }
-    }
-  }
-
-  if (!downButtonState && downButtonLastState && !upButtonState) {
-    downHoldTime = millis() - downHoldTime;
-    if (downHoldTime > 50) {
-      if (downHoldTime < 1000) {
-        if(!als_controlled_brightness);
+      break;
+    case BUTTON_LONG_UP:
+      Serial.println("Up button long press");
+      toggleWhiteLED();
+      break;
+    case BUTTON_SHORT_DOWN:
+      Serial.println("Down button short press");
+      if (!als_controlled_brightness) {
         turnDownBrightness();
-        Serial.println("Down button short press");
-      } else {
-        toggleIrLED();
-        Serial.println("Down button long press");
       }
+      break;
+    case BUTTON_LONG_DOWN:
+      Serial.println("Down button long press");
+      toggleIrLED();
+      break;
+    case BUTTON_BOTH_PRESS:
+      Serial.println("Double button press");
+      als_controlled_brightness = !als_controlled_brightness; //toggles if the ambient light sensor should be used as the brightness control
+      if (als_controlled_brightness) {
+        Serial.println("ALS Controlled Brightness");
+      }
+      if (!als_controlled_brightness) {
+        Serial.println("Button Controlled Brightness");
+      }
+      break;
+  }
+}
+
+void ALSLoop(void) {
+  if (als_controlled_brightness) {
+    static uint8_t lastBrightnessValue = 0;
+    int alsValue = blueshift.getALSValue(); //Get the value of the ambient light sensor, scale from 0 to 1024 for 0-5V
+    display_brightness = map(alsValue, 0, 1024, 1, 10); //remaps the ambient light sensor output to a 1-10 range
+    if (display_brightness != lastBrightnessValue) {  //Sets the brightness only on a change in value, only needed to not spam the serial monitor
+      setBrightness(display_brightness);
     }
+    lastBrightnessValue = display_brightness;
   }
+}
 
-  if (!downButtonState || !upButtonState && downButtonLastState && upButtonLastState){
-    als_controlled_brightness = !als_controlled_brightness;
-    Serial.print("ALS Controlling Brightness: ");
-    Serial.println(als_controlled_brightness);    
-  }
-
-  upButtonLastState = upButtonState;
-  downButtonLastState = downButtonState;
+void setBrightness(uint8_t brightness) {
+  Serial.print("Display Brightness: ");
+  Serial.println(display_brightness);
+  blueshift.setDisplayBrightness(display_brightness);
 }
 
 void turnUpBrightness(void) {
@@ -88,9 +92,7 @@ void turnUpBrightness(void) {
   {
     display_brightness++;
   }
-  Serial.print("Display Brightness: ");
-  Serial.println(display_brightness);
-  blueshift.setDisplayBrightness(display_brightness);
+  setBrightness(display_brightness);
 }
 
 void turnDownBrightness(void) {
@@ -98,9 +100,7 @@ void turnDownBrightness(void) {
   {
     display_brightness--;
   }
-  Serial.print("Display Brightness: ");
-  Serial.println(display_brightness);
-  blueshift.setDisplayBrightness(display_brightness);
+  setBrightness(display_brightness);
 }
 
 void toggleWhiteLED(void) {
